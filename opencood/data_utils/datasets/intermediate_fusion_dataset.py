@@ -52,6 +52,98 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
         self.post_processor = post_processor.build_postprocessor(
             params['postprocess'],
             train)
+    
+    def preprocess_from_carla(self, multi_vehicle_case, ego_id):
+        base_data_dict = self.retrieve_base_data_from_carla(multi_vehicle_case, ego_id)
+
+        processed_data_dict = OrderedDict()
+        processed_data_dict['ego'] = {}
+
+        ego_id = -1
+        ego_lidar_pose = []
+
+        # first find the ego vehicle's lidar pose
+        for cav_id, cav_content in base_data_dict.items():
+            if cav_content['ego']:
+                ego_id = cav_id
+                ego_lidar_pose = cav_content['params']['lidar_pose']
+                break
+
+        assert ego_id != -1
+        assert len(ego_lidar_pose) > 0
+
+        pairwise_t_matrix = \
+            self.get_pairwise_transformation(base_data_dict,
+                                             self.max_cav)
+
+        processed_features = []
+        object_stack = []
+        object_id_stack = []
+
+        # loop over all CAVs to process information
+        for cav_id, selected_cav_base in base_data_dict.items():
+            # check if the cav is within the communication range with ego
+            distance = \
+                math.sqrt((selected_cav_base['params']['lidar_pose'][0] -
+                           ego_lidar_pose[0]) ** 2 + (
+                                  selected_cav_base['params'][
+                                      'lidar_pose'][1] - ego_lidar_pose[
+                                      1]) ** 2)
+            # if distance > opencood.data_utils.datasets.COM_RANGE:
+            #     continue
+
+            selected_cav_processed = self.get_item_single_car(
+                selected_cav_base,
+                ego_lidar_pose)
+
+            object_stack.append(selected_cav_processed['object_bbx_center'])
+            object_id_stack += selected_cav_processed['object_ids']
+            processed_features.append(
+                selected_cav_processed['processed_features'])
+
+        # exclude all repetitive objects
+        unique_indices = \
+            [object_id_stack.index(x) for x in set(object_id_stack)]
+        object_stack = np.vstack(object_stack)
+        object_stack = object_stack[unique_indices]
+
+        # make sure bounding boxes across all frames have the same number
+        object_bbx_center = \
+            np.zeros((self.params['postprocess']['max_num'], 7))
+        mask = np.zeros(self.params['postprocess']['max_num'])
+        object_bbx_center[:object_stack.shape[0], :] = object_stack
+        mask[:object_stack.shape[0]] = 1
+
+        # merge preprocessed features from different cavs into the same dict
+        cav_num = len(processed_features)
+        merged_feature_dict = self.merge_features_to_dict(processed_features)
+
+        # generate the anchor boxes
+        anchor_box = self.post_processor.generate_anchor_box()
+
+        # generate targets label
+        label_dict = \
+            self.post_processor.generate_label(
+                gt_box_center=object_bbx_center,
+                anchors=anchor_box,
+                mask=mask)
+
+        processed_data_dict['ego'].update(
+            {'object_bbx_center': object_bbx_center,
+             'object_bbx_mask': mask,
+             'object_ids': [object_id_stack[i] for i in unique_indices],
+             'anchor_box': anchor_box,
+             'processed_lidar': merged_feature_dict,
+             'label_dict': label_dict,
+             'cav_num': cav_num,
+             'pairwise_t_matrix': pairwise_t_matrix,
+             'velocity': [0 for i in range(len(multi_vehicle_case))],
+             'time_delay': [0 for i in range(len(multi_vehicle_case))],
+             'infra': [0 for i in range(len(multi_vehicle_case))],
+             'spatial_correction_matrix': [np.eye(4) for i in range(len(multi_vehicle_case))],
+             "pairwise_t_matrix": pairwise_t_matrix})
+
+        return processed_data_dict
 
     def __getitem__(self, idx):
         base_data_dict = self.retrieve_base_data(idx,

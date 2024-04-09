@@ -34,6 +34,97 @@ class EarlyFusionDataset(basedataset.BaseDataset):
                                                 train)
         self.post_processor = build_postprocessor(params['postprocess'], train)
 
+    def preprocess_from_carla(self, multi_vehicle_case, ego_id):
+        base_data_dict = self.retrieve_base_data_from_carla(multi_vehicle_case, ego_id)
+
+        processed_data_dict = OrderedDict()
+        processed_data_dict['ego'] = {}
+
+        ego_lidar_pose = base_data_dict[ego_id]["params"]['lidar_pose']
+
+        projected_lidar_stack = []
+        object_stack = []
+        object_id_stack = []
+
+        # loop over all CAVs to process information
+        for cav_id, selected_cav_base in base_data_dict.items():
+            # check if the cav is within the communication range with ego
+            distance = \
+                math.sqrt((selected_cav_base['params']['lidar_pose'][0] -
+                           ego_lidar_pose[0]) ** 2 + (
+                                  selected_cav_base['params'][
+                                      'lidar_pose'][1] - ego_lidar_pose[
+                                      1]) ** 2)
+            if distance > opencood.data_utils.datasets.COM_RANGE:
+                continue
+
+            selected_cav_processed = self.get_item_single_car(
+                selected_cav_base,
+                ego_lidar_pose)
+            # all these lidar and object coordinates are projected to ego
+            # already.
+            projected_lidar_stack.append(
+                selected_cav_processed['projected_lidar'])
+            object_stack.append(selected_cav_processed['object_bbx_center'])
+            object_id_stack += selected_cav_processed['object_ids']
+
+        # exclude all repetitive objects
+        unique_indices = \
+            [object_id_stack.index(x) for x in set(object_id_stack)]
+        object_stack = np.vstack(object_stack)
+        object_stack = object_stack[unique_indices]
+
+        # make sure bounding boxes across all frames have the same number
+        object_bbx_center = \
+            np.zeros((self.params['postprocess']['max_num'], 7))
+        mask = np.zeros(self.params['postprocess']['max_num'])
+        object_bbx_center[:object_stack.shape[0], :] = object_stack
+        mask[:object_stack.shape[0]] = 1
+
+        # convert list to numpy array, (N, 4)
+        projected_lidar_stack = np.vstack(projected_lidar_stack)
+
+        # we do lidar filtering in the stacked lidar
+        projected_lidar_stack = mask_points_by_range(projected_lidar_stack,
+                                                     self.params['preprocess'][
+                                                         'cav_lidar_range'])
+        # augmentation may remove some of the bbx out of range
+        object_bbx_center_valid = object_bbx_center[mask == 1]
+        object_bbx_center_valid = \
+            box_utils.mask_boxes_outside_range_numpy(object_bbx_center_valid,
+                                                     self.params['preprocess'][
+                                                         'cav_lidar_range'],
+                                                     self.params['postprocess'][
+                                                         'order']
+                                                     )
+        mask[object_bbx_center_valid.shape[0]:] = 0
+        object_bbx_center[:object_bbx_center_valid.shape[0]] = \
+            object_bbx_center_valid
+        object_bbx_center[object_bbx_center_valid.shape[0]:] = 0
+
+        # pre-process the lidar to voxel/bev/downsampled lidar
+        lidar_dict = self.pre_processor.preprocess(projected_lidar_stack)
+
+        # generate the anchor boxes
+        anchor_box = self.post_processor.generate_anchor_box()
+
+        # generate targets label
+        label_dict = \
+            self.post_processor.generate_label(
+                gt_box_center=object_bbx_center,
+                anchors=anchor_box,
+                mask=mask)
+
+        processed_data_dict['ego'].update(
+            {'object_bbx_center': object_bbx_center,
+             'object_bbx_mask': mask,
+             'object_ids': [object_id_stack[i] for i in unique_indices],
+             'anchor_box': anchor_box,
+             'processed_lidar': lidar_dict,
+             'label_dict': label_dict})
+
+        return processed_data_dict
+
     def __getitem__(self, idx):
         base_data_dict = self.retrieve_base_data(idx)
 

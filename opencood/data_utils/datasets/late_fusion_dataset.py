@@ -36,6 +36,12 @@ class LateFusionDataset(basedataset.BaseDataset):
                                                 train)
         self.post_processor = build_postprocessor(params['postprocess'], train)
 
+    def preprocess_from_carla(self, multi_vehicle_case, ego_id):
+        base_data_dict = self.retrieve_base_data_from_carla(multi_vehicle_case, ego_id)
+        reformat_data_dict = self.get_item_test(base_data_dict)
+
+        return reformat_data_dict
+
     def __getitem__(self, idx):
         base_data_dict = self.retrieve_base_data(idx)
         if self.train:

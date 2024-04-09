@@ -21,6 +21,24 @@ from opencood.utils.pcd_utils import downsample_lidar_minimum
 from opencood.utils.transformation_utils import x1_to_x2
 
 
+def pose_to_transformation(pose):
+    x, y, z, roll, yaw, pitch = pose[0], pose[1], pose[2], np.radians(pose[3]), np.radians(pose[4]), np.radians(pose[5])
+    R = np.array([[np.cos(yaw)*np.cos(pitch), 
+                   np.cos(yaw)*np.sin(pitch)*np.sin(roll)-np.sin(yaw)*np.cos(roll), 
+                   np.cos(yaw)*np.sin(pitch)*np.cos(roll)+np.sin(yaw)*np.sin(roll),
+                   x],
+                  [np.sin(yaw)*np.cos(pitch), 
+                   np.sin(yaw)*np.sin(pitch)*np.sin(roll)+np.cos(yaw)*np.cos(roll), 
+                   np.sin(yaw)*np.sin(pitch)*np.cos(roll)-np.cos(yaw)*np.sin(roll),
+                   y],
+                  [-np.sin(pitch), 
+                   np.cos(pitch)*np.sin(roll), 
+                   np.cos(pitch)*np.cos(roll),
+                   z],
+                  [0, 0, 0, 1]])
+    return R
+
+
 class BaseDataset(Dataset):
     """
     Base dataset for all kinds of fusion. Mainly used to initialize the
@@ -104,10 +122,10 @@ class BaseDataset(Dataset):
             self.transmission_speed = 27  # Mbps
             self.backbone_delay = 0  # ms
 
-        if self.train:
-            root_dir = params['root_dir']
-        else:
-            root_dir = params['validate_dir']
+        # if self.train:
+        #     root_dir = params['root_dir']
+        # else:
+        #     root_dir = params['validate_dir']
 
         if 'train_params' not in params or\
                 'max_cav' not in params['train_params']:
@@ -115,77 +133,77 @@ class BaseDataset(Dataset):
         else:
             self.max_cav = params['train_params']['max_cav']
 
-        # first load all paths of different scenarios
-        scenario_folders = sorted([os.path.join(root_dir, x)
-                                   for x in os.listdir(root_dir) if
-                                   os.path.isdir(os.path.join(root_dir, x))])
-        # Structure: {scenario_id : {cav_1 : {timestamp1 : {yaml: path,
-        # lidar: path, cameras:list of path}}}}
-        self.scenario_database = OrderedDict()
-        self.len_record = []
+        # # first load all paths of different scenarios
+        # scenario_folders = sorted([os.path.join(root_dir, x)
+        #                            for x in os.listdir(root_dir) if
+        #                            os.path.isdir(os.path.join(root_dir, x))])
+        # # Structure: {scenario_id : {cav_1 : {timestamp1 : {yaml: path,
+        # # lidar: path, cameras:list of path}}}}
+        # self.scenario_database = OrderedDict()
+        # self.len_record = []
 
-        # loop over all scenarios
-        for (i, scenario_folder) in enumerate(scenario_folders):
-            self.scenario_database.update({i: OrderedDict()})
+        # # loop over all scenarios
+        # for (i, scenario_folder) in enumerate(scenario_folders):
+        #     self.scenario_database.update({i: OrderedDict()})
 
-            # at least 1 cav should show up
-            cav_list = sorted([x for x in os.listdir(scenario_folder)
-                               if os.path.isdir(
-                    os.path.join(scenario_folder, x))])
-            assert len(cav_list) > 0
+        #     # at least 1 cav should show up
+        #     cav_list = sorted([x for x in os.listdir(scenario_folder)
+        #                        if os.path.isdir(
+        #             os.path.join(scenario_folder, x))])
+        #     assert len(cav_list) > 0
 
-            # roadside unit data's id is always negative, so here we want to
-            # make sure they will be in the end of the list as they shouldn't
-            # be ego vehicle.
-            if int(cav_list[0]) < 0:
-                cav_list = cav_list[1:] + [cav_list[0]]
+        #     # roadside unit data's id is always negative, so here we want to
+        #     # make sure they will be in the end of the list as they shouldn't
+        #     # be ego vehicle.
+        #     if int(cav_list[0]) < 0:
+        #         cav_list = cav_list[1:] + [cav_list[0]]
 
-            # loop over all CAV data
-            for (j, cav_id) in enumerate(cav_list):
-                if j > self.max_cav - 1:
-                    print('too many cavs')
-                    break
-                self.scenario_database[i][cav_id] = OrderedDict()
+        #     # loop over all CAV data
+        #     for (j, cav_id) in enumerate(cav_list):
+        #         if j > self.max_cav - 1:
+        #             print('too many cavs')
+        #             break
+        #         self.scenario_database[i][cav_id] = OrderedDict()
 
-                # save all yaml files to the dictionary
-                cav_path = os.path.join(scenario_folder, cav_id)
+        #         # save all yaml files to the dictionary
+        #         cav_path = os.path.join(scenario_folder, cav_id)
 
-                # use the frame number as key, the full path as the values
-                yaml_files = \
-                    sorted([os.path.join(cav_path, x)
-                            for x in os.listdir(cav_path) if
-                            x.endswith('.yaml') and 'additional' not in x])
-                timestamps = self.extract_timestamps(yaml_files)
+        #         # use the frame number as key, the full path as the values
+        #         yaml_files = \
+        #             sorted([os.path.join(cav_path, x)
+        #                     for x in os.listdir(cav_path) if
+        #                     x.endswith('.yaml') and 'additional' not in x])
+        #         timestamps = self.extract_timestamps(yaml_files)
 
-                for timestamp in timestamps:
-                    self.scenario_database[i][cav_id][timestamp] = \
-                        OrderedDict()
+        #         for timestamp in timestamps:
+        #             self.scenario_database[i][cav_id][timestamp] = \
+        #                 OrderedDict()
 
-                    yaml_file = os.path.join(cav_path,
-                                             timestamp + '.yaml')
-                    lidar_file = os.path.join(cav_path,
-                                              timestamp + '.pcd')
-                    camera_files = self.load_camera_files(cav_path, timestamp)
+        #             yaml_file = os.path.join(cav_path,
+        #                                      timestamp + '.yaml')
+        #             lidar_file = os.path.join(cav_path,
+        #                                       timestamp + '.pcd')
+        #             camera_files = self.load_camera_files(cav_path, timestamp)
 
-                    self.scenario_database[i][cav_id][timestamp]['yaml'] = \
-                        yaml_file
-                    self.scenario_database[i][cav_id][timestamp]['lidar'] = \
-                        lidar_file
-                    self.scenario_database[i][cav_id][timestamp]['camera0'] = \
-                        camera_files
-                # Assume all cavs will have the same timestamps length. Thus
-                # we only need to calculate for the first vehicle in the
-                # scene.
-                if j == 0:
-                    # we regard the agent with the minimum id as the ego
-                    self.scenario_database[i][cav_id]['ego'] = True
-                    if not self.len_record:
-                        self.len_record.append(len(timestamps))
-                    else:
-                        prev_last = self.len_record[-1]
-                        self.len_record.append(prev_last + len(timestamps))
-                else:
-                    self.scenario_database[i][cav_id]['ego'] = False
+        #             self.scenario_database[i][cav_id][timestamp]['yaml'] = \
+        #                 yaml_file
+        #             self.scenario_database[i][cav_id][timestamp]['lidar'] = \
+        #                 lidar_file
+        #             self.scenario_database[i][cav_id][timestamp]['camera0'] = \
+        #                 camera_files
+        #         # Assume all cavs will have the same timestamps length. Thus
+        #         # we only need to calculate for the first vehicle in the
+        #         # scene.
+        #         if j == 0:
+        #             # we regard the agent with the minimum id as the ego
+        #             self.scenario_database[i][cav_id]['ego'] = True
+        #             if not self.len_record:
+        #                 self.len_record.append(len(timestamps))
+        #             else:
+        #                 prev_last = self.len_record[-1]
+        #                 self.len_record.append(prev_last + len(timestamps))
+        #         else:
+        #             self.scenario_database[i][cav_id]['ego'] = False
 
     def __len__(self):
         return self.len_record[-1]
@@ -617,3 +635,20 @@ class BaseDataset(Dataset):
                                       show_vis,
                                       save_path,
                                       dataset=dataset)
+        
+    def retrieve_base_data_from_carla(self, multi_vehicle_case, ego_id):
+        data = OrderedDict()
+        for vehicle_id, vehicle_data in multi_vehicle_case.items():
+            data[vehicle_id] = OrderedDict()
+            data[vehicle_id]['ego'] = (vehicle_id == ego_id)
+            if "params" in vehicle_data:
+                data[vehicle_id]['params'] = vehicle_data["params"]
+            else:
+                data[vehicle_id]['params'] = {
+                    "lidar_pose": vehicle_data["lidar_pose"],
+                    "transformation_matrix": pose_to_transformation(vehicle_data["lidar_pose"]),
+                    "ego_speed": 0,
+                    "vehicles": {},
+                }
+            data[vehicle_id]['lidar_np'] = vehicle_data["lidar"][:,:4].astype(np.float32)
+        return data

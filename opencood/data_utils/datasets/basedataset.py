@@ -638,6 +638,7 @@ class BaseDataset(Dataset):
         
     def retrieve_base_data_from_carla(self, multi_vehicle_case, ego_id):
         data = OrderedDict()
+        ego_pose = multi_vehicle_case[ego_id]["lidar_pose"]
         for vehicle_id, vehicle_data in multi_vehicle_case.items():
             data[vehicle_id] = OrderedDict()
             data[vehicle_id]['ego'] = (vehicle_id == ego_id)
@@ -646,7 +647,7 @@ class BaseDataset(Dataset):
             else:
                 data[vehicle_id]['params'] = {
                     "lidar_pose": vehicle_data["lidar_pose"],
-                    "transformation_matrix": pose_to_transformation(vehicle_data["lidar_pose"]),
+                    "transformation_matrix": np.dot(np.linalg.inv(pose_to_transformation(ego_pose)), pose_to_transformation(vehicle_data["lidar_pose"])),
                     "ego_speed": 0,
                     "vehicles": {},
                 }
